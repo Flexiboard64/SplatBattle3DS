@@ -1,0 +1,1963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ink Battle 3D</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+margin:0;background:#171923;color:white;
+font-family:Arial,sans-serif;
+display:flex;align-items:center;justify-content:center;
+min-height:100vh;padding:10px
+}
+#console{
+width:min(1100px,98vw);background:#252936;
+border:7px solid #080a10;border-radius:25px;
+padding:14px;box-shadow:0 15px 60px #000
+}
+#topScreen{
+position:relative;height:min(65vh,550px);
+min-height:340px;background:#87ceeb;
+border:5px solid #080a10;border-radius:12px;
+overflow:hidden
+}
+#game{width:100%;height:100%}
+#game canvas{display:block;width:100%;height:100%}
+#hud{
+position:absolute;top:12px;left:12px;right:12px;
+display:flex;justify-content:space-between;
+pointer-events:none;text-shadow:2px 2px 3px black;
+font-weight:bold;font-size:18px;z-index:2
+}
+#info{
+position:absolute;bottom:10px;left:12px;
+pointer-events:none;text-shadow:2px 2px 3px black;
+font-weight:bold;font-size:13px;z-index:2
+}
+#bottomScreen{
+margin:14px auto 0;width:min(700px,96%);
+height:260px;background:#111722;
+border:5px solid #080a10;border-radius:12px;
+overflow:hidden
+}
+#map{width:100%;height:100%;display:block}
+#result{
+position:absolute;inset:0;background:#101522ee;
+display:none;align-items:center;justify-content:center;
+flex-direction:column;text-align:center;z-index:5
+}
+#result h1{color:#ffe45c;font-size:35px}
+#controls{text-align:center;color:#c4c8d5;font-size:12px;padding-top:12px}
+#controls p{margin:6px 0}
+button{
+background:#f2d33e;border:0;border-radius:7px;
+padding:10px 16px;margin:5px;font-weight:bold;cursor:pointer
+}
+button:hover{background:#ffe96b}
+
+/* MENU */
+#menu{
+position:absolute;inset:0;background:#101522f2;
+display:flex;align-items:center;justify-content:center;
+flex-direction:column;text-align:center;z-index:6;
+padding:10px;overflow:auto
+}
+#menu h1{color:#ffe45c;font-size:38px;margin:0 0 12px}
+#menu button{min-width:240px}
+#menu p{margin:4px 0}
+#menu input{
+padding:10px;border-radius:7px;border:0;
+font-size:16px;font-weight:bold;text-transform:uppercase;
+text-align:center;width:150px;letter-spacing:3px;margin:5px
+}
+#roomCode{
+font-size:46px;font-weight:bold;letter-spacing:8px;
+color:#ffe45c;margin:6px 0 10px
+}
+#menuStatus{min-height:20px;color:#ffb3c8;font-size:14px;margin-top:12px}
+
+@media(max-width:600px){
+#bottomScreen{height:190px}
+#hud{font-size:13px}
+#menu h1{font-size:28px}
+}
+</style>
+
+<!-- PeerJS: peer-to-peer connections for online play -->
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+
+<body>
+<div id="console">
+
+<div id="topScreen">
+<div id="game"></div>
+
+<div id="hud">
+<span id="score1">BLUE: 0%</span>
+<span id="timer">03:00</span>
+<span id="score2">PINK: 0%</span>
+</div>
+
+<div id="info"></div>
+
+<div id="result">
+<h1 id="winner">BLUE WINS!</h1>
+<p id="finalScore"></p>
+<p id="resultNote"></p>
+<button id="playAgain" onclick="restart()">PLAY AGAIN</button>
+</div>
+
+<div id="menu">
+<h1>INK BATTLE 3D</h1>
+
+<div id="menuMain">
+<button onclick="hostGame()">HOST ONLINE GAME</button><br>
+<input id="roomInput" maxlength="5" placeholder="ROOM CODE" autocomplete="off" spellcheck="false">
+<button style="min-width:80px" onclick="joinGame()">JOIN</button>
+</div>
+
+<div id="menuLobby" style="display:none">
+<p>ROOM CODE</p>
+<div id="roomCode">-----</div>
+<p id="lobbyText">Waiting for an opponent...</p>
+<p style="font-size:12px;color:#c4c8d5">Give this code to your friend. They choose JOIN and type it in.</p>
+<button onclick="leaveToMenu()">CANCEL</button>
+</div>
+
+<p id="menuStatus"></p>
+</div>
+</div>
+
+<div id="bottomScreen">
+<canvas id="map" width="700" height="260"></canvas>
+</div>
+
+<div id="controls">
+<p id="ctl1"></p>
+<p id="ctl2"></p>
+<button id="restartBtn" onclick="restart()">RESTART MATCH</button>
+<button onclick="leaveToMenu()">MAIN MENU</button>
+</div>
+
+</div>
+
+<script type="module">
+
+import * as THREE from
+'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+
+
+
+// MAP SIZE (arena is SIZE x SIZE units)
+// Use a multiple of 20 (60, 80, 100, 120...) so the walls line up.
+const SIZE=100;
+
+const TILE=0.5;               // size of one ink tile
+const GRID=Math.round(SIZE/TILE);
+const ROUND_TIME=180;         // seconds
+
+const SPAWN_X=SIZE/2-8;       // players start near opposite edges
+const LAYOUT=SIZE/2-15;       // walls are laid out from -LAYOUT to +LAYOUT
+
+const WALL_HALF=1.5;          // real half-size of a wall block
+const SHOT_WALL_HALF=1.75;    // wall size for flying ink (wall + ink ball radius)
+
+// SHOTS
+const SHOT_RANGE=12;          // how far the ink flies (units). The old value was about 22.
+const SHOT_SPEED=42;          // units per second
+const SHOT_TIME=SHOT_RANGE/SHOT_SPEED;
+const SHOT_DROP=(1.6-0.2)/SHOT_TIME;  // ink falls so it lands at the end of its range
+const PAINT_RADIUS=1.8;       // size of the splash where ink lands
+
+// HIDING IN INK
+const DIVE_SPEED=1.7;         // speed multiplier while hiding in your own ink
+
+// ONLINE
+const ROOM_PREFIX='inkbattle3d-';
+const NET_SEND_INTERVAL=0.05; // host sends the game state 20 times per second
+
+// ============================================================
+// GAME STATE
+// ============================================================
+
+let mode='menu';      // 'menu' | 'host' | 'guest'
+let playing=false;    // true while a match is running
+let ended=false;      // true when the round is over
+
+let p1,p2;
+let me;               // the player the camera follows
+
+let time=ROUND_TIME;
+let lastTime=performance.now();
+let mapTimer=0;
+let netTimer=0;
+
+const r2=v=>Math.round(v*100)/100;
+const r3=v=>Math.round(v*1000)/1000;
+const wrapAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
+
+const timerEl=document.getElementById('timer');
+const score1El=document.getElementById('score1');
+const score2El=document.getElementById('score2');
+
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x87ceeb);
+
+const camera=new THREE.PerspectiveCamera(55,1,0.3,300);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+
+document.getElementById('game').appendChild(renderer.domElement);
+
+// LIGHTING
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x687080,2));
+
+const sun=new THREE.DirectionalLight(0xffffff,2);
+sun.position.set(-10,25,15);
+sun.castShadow=true;
+scene.add(sun);
+
+// ARENA
+
+const floor=new THREE.Mesh(
+new THREE.BoxGeometry(SIZE,1,SIZE),
+new THREE.MeshStandardMaterial({color:0x777b82})
+);
+
+floor.position.y=-0.5;
+floor.receiveShadow=true;
+scene.add(floor);
+
+// OBSTACLES (grid of wall blocks, spawn areas at the edges stay open)
+
+const obstacles=[];
+
+for(let x=-LAYOUT;x<=LAYOUT;x+=10){
+for(let z=-LAYOUT;z<=LAYOUT;z+=10){
+
+const block=new THREE.Mesh(
+new THREE.BoxGeometry(3,2.5,3),
+new THREE.MeshStandardMaterial({color:0x555b64})
+);
+
+block.position.set(x,1.25,z);
+block.castShadow=true;
+block.receiveShadow=true;
+
+scene.add(block);
+obstacles.push(block);
+
+}}
+
+const tiles=new Uint8Array(GRID*GRID);   // 0 = empty, 1 = blue, 2 = pink
+const tileSize=SIZE/GRID;
+
+let blueCount=0;
+let pinkCount=0;
+
+// Tiles inside walls can never be painted (and don't count for the score)
+
+const wallTile=new Uint8Array(GRID*GRID);
+
+for(const b of obstacles){
+
+const minTx=Math.max(0,Math.floor((b.position.x-WALL_HALF+SIZE/2)/tileSize));
+const maxTx=Math.min(GRID-1,Math.ceil((b.position.x+WALL_HALF+SIZE/2)/tileSize));
+
+const minTz=Math.max(0,Math.floor((b.position.z-WALL_HALF+SIZE/2)/tileSize));
+const maxTz=Math.min(GRID-1,Math.ceil((b.position.z+WALL_HALF+SIZE/2)/tileSize));
+
+for(let tz=minTz;tz<=maxTz;tz++){
+for(let tx=minTx;tx<=maxTx;tx++){
+
+const wx=-SIZE/2+(tx+0.5)*tileSize;
+const wz=-SIZE/2+(tz+0.5)*tileSize;
+
+if(
+Math.abs(wx-b.position.x)<WALL_HALF&&
+Math.abs(wz-b.position.z)<WALL_HALF
+){
+wallTile[tz*GRID+tx]=1;
+}
+
+}}
+
+}
+
+let paintableTiles=0;
+
+for(const w of wallTile){
+if(!w)paintableTiles++;
+}
+
+const inkColors=[
+0x777b82,
+0x168cff,
+0xff3c9e
+];
+
+const inkRGB=inkColors.map(c=>[
+(c>>16)&255,
+(c>>8)&255,
+c&255
+]);
+
+// inkData = used by the 3D texture (rows are flipped to match the plane)
+// mapData = used by the minimap (normal orientation)
+
+const inkData=new Uint8Array(GRID*GRID*4);
+const mapData=new Uint8ClampedArray(GRID*GRID*4);
+
+const inkTexture=new THREE.DataTexture(
+inkData,GRID,GRID,THREE.RGBAFormat
+);
+
+inkTexture.magFilter=THREE.NearestFilter;
+inkTexture.minFilter=THREE.LinearFilter;
+inkTexture.colorSpace=THREE.SRGBColorSpace;
+inkTexture.generateMipmaps=false;
+inkTexture.needsUpdate=true;
+
+const inkPlane=new THREE.Mesh(
+new THREE.PlaneGeometry(SIZE,SIZE),
+new THREE.MeshBasicMaterial({
+map:inkTexture,
+transparent:true,
+depthWrite:false,
+polygonOffset:true,
+polygonOffsetFactor:-1,
+polygonOffsetUnits:-1
+})
+);
+
+inkPlane.rotation.x=-Math.PI/2;
+inkPlane.position.y=0.012;
+scene.add(inkPlane);
+
+let inkDirty=false;
+
+function setTile(index,team){
+
+const tx=index%GRID;
+const tz=(index-tx)/GRID;
+
+const rgb=inkRGB[team];
+const alpha=team===0?0:255;
+
+// 3D texture (row 0 of the texture is the +Z side of the plane)
+const o=((GRID-1-tz)*GRID+tx)*4;
+
+inkData[o]=rgb[0];
+inkData[o+1]=rgb[1];
+inkData[o+2]=rgb[2];
+inkData[o+3]=alpha;
+
+// minimap
+const m=index*4;
+
+mapData[m]=rgb[0];
+mapData[m+1]=rgb[1];
+mapData[m+2]=rgb[2];
+mapData[m+3]=alpha;
+
+inkDirty=true;
+
+}
+
+function clearInk(){
+
+tiles.fill(0);
+inkData.fill(0);
+mapData.fill(0);
+
+blueCount=0;
+pinkCount=0;
+inkDirty=true;
+
+}
+
+// Which team's ink is at this spot? (0 = nobody's)
+function tileAt(x,z){
+
+const tx=Math.floor((x+SIZE/2)/tileSize);
+const tz=Math.floor((z+SIZE/2)/tileSize);
+
+if(tx<0||tx>=GRID||tz<0||tz>=GRID)return 0;
+
+return tiles[tz*GRID+tx];
+
+}
+
+// DIRECTION CONVENTION
+// direction = 0        -> facing -Z (up on the minimap)
+// direction = PI/2     -> facing +X (right on the minimap)
+// Forward vector = ( sin(direction), -cos(direction) )
+// The 3D model is rotated by -direction so it faces the same way.
+
+function createPlayer(color,x,z,direction){
+
+const group=new THREE.Group();
+
+const body=new THREE.Mesh(
+new THREE.CapsuleGeometry(0.65,1.1,4,8),
+new THREE.MeshStandardMaterial({color})
+);
+
+body.position.y=1.2;
+body.castShadow=true;
+group.add(body);
+
+const weapon=new THREE.Mesh(
+new THREE.CylinderGeometry(0.13,0.18,1.5),
+new THREE.MeshStandardMaterial({color:0x252525})
+);
+
+weapon.rotation.x=Math.PI/2;
+weapon.position.set(0,1.4,-0.8);
+group.add(weapon);
+
+// HIDING: a flat blob of ink. Only YOU can see your own blob.
+const blob=new THREE.Mesh(
+new THREE.SphereGeometry(0.7,16,10),
+new THREE.MeshStandardMaterial({
+color,roughness:0.3,emissive:color,emissiveIntensity:0.25
+})
+);
+
+blob.scale.set(1,0.3,1.3);
+blob.position.y=0.2;
+blob.visible=false;
+group.add(blob);
+
+// HIDING: a faint ripple the ENEMY can see while you swim (a small clue)
+const ring=new THREE.Mesh(
+new THREE.RingGeometry(0.55,0.8,24),
+new THREE.MeshBasicMaterial({
+color:0xffffff,transparent:true,opacity:0.35,
+side:THREE.DoubleSide,depthWrite:false
+})
+);
+
+ring.rotation.x=-Math.PI/2;
+ring.position.y=0.05;
+ring.visible=false;
+group.add(ring);
+
+group.position.set(x,0,z);
+group.rotation.y=-direction;
+scene.add(group);
+
+return{
+group,body,weapon,blob,ring,
+x,z,
+direction,
+color,
+shots:[],
+cooldown:0,
+dead:false,
+respawn:0,
+kills:0,
+diving:false,   // true while hiding in own ink
+moving:false,
+target:{x,z,d:direction}   // used to smooth the other player online
+};
+
+}
+
+// Shows the right model for the current hiding state.
+// Normal: body + weapon. Hiding: you see your blob, the enemy sees nothing
+// (only a faint ripple while you move).
+function updateVisual(p){
+
+if(!p)return;
+
+p.body.visible=!p.diving;
+p.weapon.visible=!p.diving;
+p.blob.visible=p.diving&&p===me;
+p.ring.visible=p.diving&&p!==me&&p.moving;
+
+}
+
+function resetPlayers(){
+
+// Players start at opposite edges, facing each other
+p1=createPlayer(0x168cff,-SPAWN_X,0, Math.PI/2);
+p2=createPlayer(0xff3c9e, SPAWN_X,0,-Math.PI/2);
+
+// The camera follows you. The online guest is the pink player.
+me=(mode==='guest')?p2:p1;
+
+updateVisual(p1);
+updateVisual(p2);
+
+}
+
+function updateCamera(dt,snap=false){
+
+// The camera comes in closer and lower while you hide in ink
+const distance=me.diving?7.5:9;
+const height=me.diving?4:6;
+
+// Camera stays behind your player
+
+const behindX=-Math.sin(me.direction);
+const behindZ=Math.cos(me.direction);
+
+const target=new THREE.Vector3(
+me.x+behindX*distance,
+height,
+me.z+behindZ*distance
+);
+
+if(snap){
+
+camera.position.copy(target);
+
+}else{
+
+const smoothness=1-Math.exp(-5*dt);
+camera.position.lerp(target,smoothness);
+
+}
+
+camera.lookAt(
+me.x,
+1.2,
+me.z
+);
+
+}
+
+
+const keys={};
+
+const GAME_KEYS=new Set([
+'w','a','s','d','f','e','enter','shift','/','.',
+'arrowup','arrowdown','arrowleft','arrowright',' '
+]);
+
+window.addEventListener('keydown',e=>{
+
+// Let people type the room code
+if(e.target&&e.target.tagName==='INPUT')return;
+
+const key=e.key.toLowerCase();
+
+keys[key]=true;
+
+if(GAME_KEYS.has(key)){
+
+// Stops Enter from clicking a focused button
+e.preventDefault();
+
+if(document.activeElement){
+document.activeElement.blur();
+}
+
+}
+
+});
+
+window.addEventListener('keyup',e=>{
+keys[e.key.toLowerCase()]=false;
+});
+
+// Clear stuck keys when the window loses focus
+window.addEventListener('blur',()=>{
+for(const k in keys)keys[k]=false;
+});
+
+// INPUTS
+// Every player is controlled through a simple input object:
+// { up, down, left, right, shoot, dive }
+
+// Online: WASD or arrows, F or Enter or Space to shoot, E or Shift or / to hide
+function inputOnline(){
+return{
+up:!!(keys['w']||keys['arrowup']),
+down:!!(keys['s']||keys['arrowdown']),
+left:!!(keys['a']||keys['arrowleft']),
+right:!!(keys['d']||keys['arrowright']),
+shoot:!!(keys['f']||keys['enter']||keys[' ']),
+dive:!!(keys['e']||keys['shift']||keys['/'])
+};
+}
+
+// Input of the remote player (host side)
+const EMPTY_INPUT={up:false,down:false,left:false,right:false,shoot:false,dive:false};
+let remoteInput={...EMPTY_INPUT};
+
+
+// Returns true if the line from (x1,z1) to (x2,z2)
+// touches the square wall centered at (cx,cz).
+
+function segmentHitsBox(x1,z1,x2,z2,cx,cz,half){
+
+const minX=cx-half;
+const maxX=cx+half;
+const minZ=cz-half;
+const maxZ=cz+half;
+
+const dx=x2-x1;
+const dz=z2-z1;
+
+let tMin=0;
+let tMax=1;
+
+if(Math.abs(dx)<0.000001){
+
+if(x1<minX||x1>maxX)return false;
+
+}else{
+
+let t1=(minX-x1)/dx;
+let t2=(maxX-x1)/dx;
+
+if(t1>t2){
+const tmp=t1;
+t1=t2;
+t2=tmp;
+}
+
+tMin=Math.max(tMin,t1);
+tMax=Math.min(tMax,t2);
+
+}
+
+if(Math.abs(dz)<0.000001){
+
+if(z1<minZ||z1>maxZ)return false;
+
+}else{
+
+let t1=(minZ-z1)/dz;
+let t2=(maxZ-z1)/dz;
+
+if(t1>t2){
+const tmp=t1;
+t1=t2;
+t2=tmp;
+}
+
+tMin=Math.max(tMin,t1);
+tMax=Math.min(tMax,t2);
+
+}
+
+return tMax>=tMin&&tMin<=1&&tMax>=0;
+
+}
+
+// Distance from a point to a line segment
+function distToSegment(px,pz,x1,z1,x2,z2){
+
+const dx=x2-x1;
+const dz=z2-z1;
+const len2=dx*dx+dz*dz;
+
+let t=len2>0?((px-x1)*dx+(pz-z1)*dz)/len2:0;
+t=Math.max(0,Math.min(1,t));
+
+return Math.hypot(px-(x1+t*dx),pz-(z1+t*dz));
+
+}
+
+// ============================================================
+// PAINT
+// ============================================================
+//
+// Ink can not:
+//  - cover tiles inside a wall
+//  - spread to the other side of a wall
+
+function paint(x,z,team,radius=1.6){
+
+// Only walls close to the splash can block it
+const nearWalls=obstacles.filter(b=>
+Math.abs(b.position.x-x)<radius+WALL_HALF+1&&
+Math.abs(b.position.z-z)<radius+WALL_HALF+1
+);
+
+const minX=Math.floor((x-radius+SIZE/2)/tileSize);
+const maxX=Math.floor((x+radius+SIZE/2)/tileSize);
+
+const minZ=Math.floor((z-radius+SIZE/2)/tileSize);
+const maxZ=Math.floor((z+radius+SIZE/2)/tileSize);
+
+for(let tz=minZ;tz<=maxZ;tz++){
+for(let tx=minX;tx<=maxX;tx++){
+
+if(tx<0||tx>=GRID||tz<0||tz>=GRID)continue;
+
+const index=tz*GRID+tx;
+
+// Never paint inside a wall
+if(wallTile[index])continue;
+
+// Already this color
+if(tiles[index]===team)continue;
+
+const wx=-SIZE/2+(tx+0.5)*tileSize;
+const wz=-SIZE/2+(tz+0.5)*tileSize;
+
+if(Math.hypot(wx-x,wz-z)>radius)continue;
+
+// Never paint tiles that are behind a wall
+let behindWall=false;
+
+for(const b of nearWalls){
+
+if(segmentHitsBox(
+x,z,wx,wz,
+b.position.x,b.position.z,
+WALL_HALF
+)){
+behindWall=true;
+break;
+}
+
+}
+
+if(behindWall)continue;
+
+// Update team counts
+const old=tiles[index];
+
+if(old===1)blueCount--;
+if(old===2)pinkCount--;
+
+if(team===1)blueCount++;
+if(team===2)pinkCount++;
+
+tiles[index]=team;
+setTile(index,team);
+
+}}
+}
+
+// ============================================================
+// COLLISION
+// ============================================================
+
+function blocked(x,z){
+
+if(
+Math.abs(x)>SIZE/2-1||
+Math.abs(z)>SIZE/2-1
+)return true;
+
+return obstacles.some(b=>
+Math.abs(x-b.position.x)<2.1&&
+Math.abs(z-b.position.z)<2.1
+);
+
+}
+
+// PROJECTILE WALL COLLISION
+
+function segmentHitsWall(x1,z1,x2,z2){
+
+for(const b of obstacles){
+
+if(segmentHitsBox(
+x1,z1,x2,z2,
+b.position.x,b.position.z,
+SHOT_WALL_HALF
+)){
+return true;
+}
+
+}
+
+return false;
+
+}
+
+// ============================================================
+// SHOOTING
+// ============================================================
+
+// Shared by all ink balls (no new geometry per shot)
+const ballGeometry=new THREE.SphereGeometry(0.25,12,10);
+
+const ballMaterials=[
+null,
+new THREE.MeshStandardMaterial({color:inkColors[1],roughness:0.4}),
+new THREE.MeshStandardMaterial({color:inkColors[2],roughness:0.4})
+];
+
+// Creates the 4 ink balls
+// (the online guest also calls this to show the host's shots)
+function fireShots(owner,x,z,direction,team){
+
+for(let i=0;i<4;i++){
+
+const spread=(i-1.5)*0.09;
+const angle=direction+spread;
+
+const ball=new THREE.Mesh(ballGeometry,ballMaterials[team]);
+
+ball.position.set(
+x+Math.sin(angle)*0.9,
+1.6,
+z-Math.cos(angle)*0.9
+);
+
+scene.add(ball);
+
+owner.shots.push({
+mesh:ball,
+vx:Math.sin(angle)*SHOT_SPEED,
+vz:-Math.cos(angle)*SHOT_SPEED,
+life:SHOT_TIME+0.1,
+team
+});
+
+}
+
+}
+
+function shoot(player,team){
+
+if(player.dead||player.cooldown>0)return;
+
+player.cooldown=0.5;
+
+fireShots(player,player.x,player.z,player.direction,team);
+
+// Tell the online guest to show these shots too
+if(mode==='host'){
+send({t:'s',team,x:r2(player.x),z:r2(player.z),d:r3(player.direction)});
+}
+
+}
+
+// ============================================================
+// PLAYER UPDATE
+// ============================================================
+//
+// Both players use tank-style controls:
+//   up/down    = move forward/backward
+//   left/right = turn left/right
+//   dive       = hold to hide in your OWN team's ink
+//
+// While hiding you are invisible to the enemy, move faster,
+// and can not shoot. You come back up if you leave your ink.
+//
+// authority = true  -> this machine decides everything (local game or host)
+// authority = false -> online guest: only predicts its own movement
+
+function updatePlayer(player,input,team,dt,authority){
+
+if(player.dead){
+
+player.diving=false;
+player.moving=false;
+
+if(authority){
+
+player.respawn-=dt*60; // about 2 seconds, independent of frame rate
+
+if(player.respawn<=0){
+
+player.dead=false;
+player.x=team===1?-SPAWN_X:SPAWN_X;
+player.z=0;
+player.direction=team===1?Math.PI/2:-Math.PI/2;
+
+player.group.visible=true;
+player.group.rotation.y=-player.direction;
+player.group.position.set(
+player.x,0,player.z
+);
+
+}
+
+}
+
+return;
+}
+
+// HIDING: only possible while standing in your own team's ink
+const diving=!!input.dive&&tileAt(player.x,player.z)===team;
+
+player.diving=diving;
+
+const turnSpeed=2.8*dt; // radians per second
+const speed=7.8*dt*(diving?DIVE_SPEED:1); // units per second
+
+// Left turns left, right turns right
+
+if(input.left){
+player.direction-=turnSpeed;
+}
+
+if(input.right){
+player.direction+=turnSpeed;
+}
+
+let forward=0;
+
+if(input.up)forward+=1;
+if(input.down)forward-=1;
+
+player.moving=forward!==0;
+
+if(forward!==0){
+
+const dx=Math.sin(player.direction)*speed*forward;
+const dz=-Math.cos(player.direction)*speed*forward;
+
+const oldX=player.x;
+const oldZ=player.z;
+
+player.x+=dx;
+
+if(blocked(player.x,player.z)){
+player.x=oldX;
+}
+
+player.z+=dz;
+
+if(blocked(player.x,player.z)){
+player.z=oldZ;
+}
+
+}
+
+// Negative sign so the model faces the same way you move and shoot
+
+player.group.rotation.y=-player.direction;
+
+player.group.position.set(
+player.x,0,player.z
+);
+
+updateVisual(player);
+
+// SHOOT (only the host / local game creates shots)
+// You can not shoot while hiding in ink.
+
+if(authority&&input.shoot&&!diving){
+shoot(player,team);
+}
+
+player.cooldown=Math.max(
+0,
+player.cooldown-dt
+);
+
+}
+
+// ============================================================
+// PROJECTILE UPDATE
+// ============================================================
+// authority = false (online guest): the balls are only visuals.
+// Painting and hits come from the host.
+
+function updateShots(owner,enemy,authority,dt){
+
+for(let i=owner.shots.length-1;i>=0;i--){
+
+const s=owner.shots[i];
+
+const oldX=s.mesh.position.x;
+const oldZ=s.mesh.position.z;
+
+const newX=oldX+s.vx*dt;
+const newZ=oldZ+s.vz*dt;
+
+const newY=Math.max(
+0.2,
+s.mesh.position.y-SHOT_DROP*dt
+);
+
+// WALL COLLISION
+
+if(
+newY<=2.75&&
+segmentHitsWall(oldX,oldZ,newX,newZ)
+){
+
+removeShot(owner,i);
+continue;
+
+}
+
+// UPDATE POSITION
+
+s.mesh.position.x=newX;
+s.mesh.position.z=newZ;
+s.mesh.position.y=newY;
+
+s.life-=dt;
+
+// ENEMY COLLISION
+
+const hitEnemy=
+!enemy.dead&&
+distToSegment(enemy.x,enemy.z,oldX,oldZ,newX,newZ)<0.9&&
+newY<2.2;
+
+if(hitEnemy){
+
+if(authority){
+
+enemy.dead=true;
+enemy.diving=false;
+enemy.moving=false;
+enemy.respawn=120;
+enemy.group.visible=false;
+
+owner.kills++;
+
+}
+
+removeShot(owner,i);
+continue;
+
+}
+
+// GROUND AND BOUNDARIES
+
+if(
+newY<=0.25||
+s.life<=0||
+Math.abs(newX)>SIZE/2||
+Math.abs(newZ)>SIZE/2
+){
+
+if(
+authority&&
+Math.abs(newX)<SIZE/2&&
+Math.abs(newZ)<SIZE/2&&
+newY<=0.25
+){
+
+paint(newX,newZ,s.team,PAINT_RADIUS);
+
+// Tell the online guest where ink landed
+if(mode==='host'){
+send({t:'p',x:r2(newX),z:r2(newZ),team:s.team});
+}
+
+}
+
+removeShot(owner,i);
+
+}
+
+}
+
+}
+
+function removeShot(player,index){
+
+scene.remove(player.shots[index].mesh);
+player.shots.splice(index,1);
+
+}
+
+// ============================================================
+// SCORING
+// ============================================================
+// Percentages are based on tiles that can actually be painted
+
+function calculateScore(){
+
+score1El.textContent=
+`BLUE: ${Math.round(blueCount/paintableTiles*100)}%`;
+
+score2El.textContent=
+`PINK: ${Math.round(pinkCount/paintableTiles*100)}%`;
+
+return{blue:blueCount,pink:pinkCount};
+
+}
+
+function formatTime(t){
+
+const seconds=Math.ceil(t);
+
+return `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+
+}
+
+// ============================================================
+// MINIMAP
+// ============================================================
+
+const mapCanvas=document.getElementById('map');
+const ctx=mapCanvas.getContext('2d');
+
+// Small canvas (1 pixel per ink tile) that gets scaled onto the minimap
+const inkCanvas=document.createElement('canvas');
+inkCanvas.width=GRID;
+inkCanvas.height=GRID;
+
+const inkCtx=inkCanvas.getContext('2d');
+const mapImage=new ImageData(mapData,GRID,GRID);
+
+function drawMap(){
+
+const mapW=mapCanvas.width;
+const mapH=mapCanvas.height;
+
+ctx.fillStyle='#333b48';
+ctx.fillRect(0,0,mapW,mapH);
+
+// TERRITORY
+
+inkCtx.putImageData(mapImage,0,0);
+
+ctx.imageSmoothingEnabled=false;
+ctx.drawImage(inkCanvas,0,0,mapW,mapH);
+
+// WALLS
+
+ctx.fillStyle='#1a1e27';
+
+for(const b of obstacles){
+
+ctx.fillRect(
+(b.position.x-WALL_HALF+SIZE/2)/SIZE*mapW,
+(b.position.z-WALL_HALF+SIZE/2)/SIZE*mapH,
+(WALL_HALF*2)/SIZE*mapW,
+(WALL_HALF*2)/SIZE*mapH
+);
+
+}
+
+// A player hiding in ink is hidden on the minimap too
+// (unless it is you)
+
+// BLUE PLAYER
+
+if(!p1.diving||p1===me){
+
+ctx.fillStyle='white';
+ctx.beginPath();
+
+ctx.arc(
+(p1.x+SIZE/2)/SIZE*mapW,
+(p1.z+SIZE/2)/SIZE*mapH,
+5,0,Math.PI*2
+);
+
+ctx.fill();
+
+}
+
+// PINK PLAYER
+
+if(!p2.diving||p2===me){
+
+ctx.fillStyle='#ffe45c';
+ctx.beginPath();
+
+ctx.arc(
+(p2.x+SIZE/2)/SIZE*mapW,
+(p2.z+SIZE/2)/SIZE*mapH,
+5,0,Math.PI*2
+);
+
+ctx.fill();
+
+}
+
+}
+
+// ============================================================
+// ROUND
+// ============================================================
+
+function showResult(blue,pink){
+
+let winner='DRAW!';
+
+if(blue>pink)winner='BLUE WINS!';
+if(pink>blue)winner='PINK WINS!';
+
+document.getElementById('winner').textContent=winner;
+
+document.getElementById('finalScore').textContent=
+`Blue: ${Math.round(blue/paintableTiles*100)}% | Pink: ${Math.round(pink/paintableTiles*100)}%`;
+
+// Only the host (or a local game) can start a new round
+const guest=mode==='guest';
+
+document.getElementById('playAgain').style.display=guest?'none':'inline-block';
+document.getElementById('resultNote').textContent=
+guest?'Waiting for the host to start a rematch...':'';
+
+document.getElementById('result').style.display='flex';
+
+}
+
+function finish(){
+
+ended=true;
+
+const score=calculateScore();
+
+showResult(score.blue,score.pink);
+
+if(mode==='host'){
+send({t:'end',blue:score.blue,pink:score.pink});
+}
+
+}
+
+// Resets the whole world for a new round
+function resetMatch(){
+
+for(const p of [p1,p2]){
+
+if(!p)continue;
+
+for(const s of p.shots){
+scene.remove(s.mesh);
+}
+
+scene.remove(p.group);
+
+}
+
+clearInk();
+
+for(const key in keys){
+keys[key]=false;
+}
+
+remoteInput={...EMPTY_INPUT};
+lastInputKey='';
+inputTimer=0;
+netTimer=0;
+
+resetPlayers();
+
+time=ROUND_TIME;
+ended=false;
+mapTimer=0;
+lastTime=performance.now();
+
+document.getElementById('result').style.display='none';
+timerEl.textContent=formatTime(ROUND_TIME);
+
+calculateScore();
+drawMap();
+updateCamera(1,true);
+
+}
+
+// Starts a round (local game, host or guest)
+function startMatch(){
+
+// If the room-code box still has focus, it would swallow every key press
+if(document.activeElement&&document.activeElement.blur){
+document.activeElement.blur();
+}
+
+resetMatch();
+
+document.getElementById('menu').style.display='none';
+
+playing=true;
+ended=false;
+
+updateHints();
+
+}
+
+// ============================================================
+// ONLINE (PeerJS, host-authoritative)
+// ============================================================
+//
+// - The HOST creates a room (a short room code). The host's game is the
+//   one that runs the match: it accepts the first player who joins
+//   and rejects everyone else ("room full").
+// - The GUEST joins with the room code and sends only its key presses.
+// - The host simulates everything and sends the state to the guest.
+
+let net={peer:null,conn:null,code:''};
+
+function send(msg){
+
+if(net.conn&&net.conn.open){
+net.conn.send(msg);
+}
+
+}
+
+function closeNet(){
+
+try{if(net.conn)net.conn.close();}catch(e){}
+try{if(net.peer)net.peer.destroy();}catch(e){}
+
+net={peer:null,conn:null,code:''};
+
+}
+
+window.addEventListener('beforeunload',closeNet);
+
+const CODE_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function makeCode(){
+
+let code='';
+
+for(let i=0;i<5;i++){
+code+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];
+}
+
+return code;
+
+}
+
+// ---------- HOST ----------
+
+function hostGame(){
+
+if(typeof Peer==='undefined'){
+setStatus('Online play needs the PeerJS library. Check your internet connection and reload the page.');
+return;
+}
+
+closeNet();
+
+mode='host';
+playing=false;
+
+setStatus('Creating room...');
+
+openHostPeer(0);
+
+}
+
+function openHostPeer(tries){
+
+const code=makeCode();
+const peer=new Peer(ROOM_PREFIX+code);
+
+net.peer=peer;
+net.code=code;
+
+peer.on('open',()=>{
+showLobby(code,'Waiting for an opponent...');
+});
+
+peer.on('connection',onGuestConnection);
+
+peer.on('error',err=>{
+
+// Room code already used by someone else: try another one
+if(err.type==='unavailable-id'&&tries<5){
+try{peer.destroy();}catch(e){}
+openHostPeer(tries+1);
+return;
+}
+
+failToMenu('Could not create the room ('+err.type+').');
+
+});
+
+peer.on('disconnected',()=>{
+// Lost the connection to the matchmaking server: try to get it back
+try{peer.reconnect();}catch(e){}
+});
+
+}
+
+// Matchmaking on the host: the first player in gets the room
+function onGuestConnection(conn){
+
+if(net.conn){
+
+// Room is full
+conn.on('open',()=>{
+conn.send({t:'full'});
+setTimeout(()=>{try{conn.close();}catch(e){}},500);
+});
+
+return;
+
+}
+
+net.conn=conn;
+
+conn.on('open',()=>{
+
+// Opponent found: start the match
+startMatch();
+send({t:'start'});
+
+});
+
+conn.on('data',handleHostData);
+
+conn.on('close',()=>guestLeft(conn));
+conn.on('error',()=>guestLeft(conn));
+
+}
+
+function guestLeft(conn){
+
+if(mode!=='host'||net.conn!==conn)return;
+
+net.conn=null;
+playing=false;
+remoteInput={...EMPTY_INPUT};
+
+document.getElementById('result').style.display='none';
+
+showLobby(net.code,'Your opponent left. Waiting for a new opponent...');
+
+}
+
+function handleHostData(m){
+
+if(!m||typeof m!=='object')return;
+
+if(m.t==='i'){
+
+remoteInput={
+up:!!m.up,
+down:!!m.down,
+left:!!m.left,
+right:!!m.right,
+shoot:!!m.shoot,
+dive:!!m.dive
+};
+
+}
+
+}
+
+function snapshot(){
+
+return{
+t:'st',
+time:r2(time),
+p:[
+[r2(p1.x),r2(p1.z),r3(p1.direction),p1.dead?1:0,p1.diving?1:0],
+[r2(p2.x),r2(p2.z),r3(p2.direction),p2.dead?1:0,p2.diving?1:0]
+]
+};
+
+}
+
+// ---------- GUEST ----------
+
+function joinGame(){
+
+const code=document.getElementById('roomInput').value.trim().toUpperCase();
+
+if(code.length<3){
+setStatus('Type the room code first.');
+return;
+}
+
+if(typeof Peer==='undefined'){
+setStatus('Online play needs the PeerJS library. Check your internet connection and reload the page.');
+return;
+}
+
+closeNet();
+
+mode='guest';
+playing=false;
+net.code=code;
+
+setStatus('Connecting to room '+code+'...');
+
+const peer=new Peer();
+net.peer=peer;
+
+let opened=false;
+
+const timeout=setTimeout(()=>{
+if(!opened)failToMenu('Could not connect. Check the room code and try again.');
+},12000);
+
+peer.on('open',()=>{
+
+const conn=peer.connect(ROOM_PREFIX+code,{
+reliable:true,
+serialization:'json'
+});
+
+net.conn=conn;
+
+conn.on('open',()=>{
+opened=true;
+clearTimeout(timeout);
+setStatus('Connected! Waiting for the host to start...');
+});
+
+conn.on('data',handleGuestData);
+
+conn.on('close',()=>{
+clearTimeout(timeout);
+if(mode==='guest')failToMenu('The host left the game.');
+});
+
+conn.on('error',()=>{
+clearTimeout(timeout);
+if(mode==='guest')failToMenu('Connection lost.');
+});
+
+});
+
+peer.on('error',err=>{
+
+clearTimeout(timeout);
+
+if(mode!=='guest')return;
+
+if(err.type==='peer-unavailable'){
+failToMenu('Room not found. Check the code.');
+}else{
+failToMenu('Connection error ('+err.type+').');
+}
+
+});
+
+}
+
+function handleGuestData(m){
+
+if(!m||typeof m!=='object')return;
+
+switch(m.t){
+
+case 'full':
+failToMenu('That room is full.');
+break;
+
+case 'start':
+startMatch();
+break;
+
+case 'st':
+if(playing&&!ended)applyState(m);
+break;
+
+case 's':
+if(playing&&!ended&&(m.team===1||m.team===2)&&isFinite(m.x)&&isFinite(m.z)&&isFinite(m.d)){
+fireShots(m.team===1?p1:p2,m.x,m.z,m.d,m.team);
+}
+break;
+
+case 'p':
+if(playing&&!ended&&(m.team===1||m.team===2)&&isFinite(m.x)&&isFinite(m.z)){
+paint(m.x,m.z,m.team,PAINT_RADIUS);
+}
+break;
+
+case 'end':
+if(playing&&!ended){
+ended=true;
+blueCount=m.blue|0;
+pinkCount=m.pink|0;
+calculateScore();
+showResult(blueCount,pinkCount);
+}
+break;
+
+}
+
+}
+
+// Guest: apply the state sent by the host
+
+function setDeadFlag(p,dead){
+
+const was=p.dead;
+
+p.dead=dead;
+p.group.visible=!dead;
+
+return was&&!dead; // true if the player just respawned
+
+}
+
+function applyState(m){
+
+if(!Array.isArray(m.p))return;
+
+time=m.time;
+
+syncRemote(p1,m.p[0]);
+syncOwn(p2,m.p[1]);
+
+}
+
+// The other player: just remember where the host says it is
+function syncRemote(p,s){
+
+const respawned=setDeadFlag(p,!!s[3]);
+
+// Hiding state comes from the host
+p.diving=!p.dead&&!!s[4];
+
+p.target.x=s[0];
+p.target.z=s[1];
+p.target.d=s[2];
+
+if(respawned){
+p.x=s[0];
+p.z=s[1];
+p.direction=s[2];
+}
+
+}
+
+// Your own player: moves instantly (prediction), then gets gently
+// pulled towards the position the host says is correct
+function syncOwn(p,s){
+
+const respawned=setDeadFlag(p,!!s[3]);
+
+if(p.dead)return;
+
+const dx=s[0]-p.x;
+const dz=s[1]-p.z;
+const dd=wrapAngle(s[2]-p.direction);
+
+if(respawned||Math.hypot(dx,dz)>4||Math.abs(dd)>1.2){
+
+// Too far off: snap
+p.x=s[0];
+p.z=s[1];
+p.direction=s[2];
+
+}else{
+
+const i=inputOnline();
+const moving=i.up||i.down||i.left||i.right;
+const g=moving?0.04:0.3;
+
+p.x+=dx*g;
+p.z+=dz*g;
+p.direction+=dd*g;
+
+}
+
+}
+
+function smoothRemote(p,dt){
+
+const k=Math.min(1,dt*14);
+
+// "Moving" is used for the ripple the enemy sees while you swim
+p.moving=Math.hypot(p.target.x-p.x,p.target.z-p.z)>0.08;
+
+p.x+=(p.target.x-p.x)*k;
+p.z+=(p.target.z-p.z)*k;
+p.direction+=wrapAngle(p.target.d-p.direction)*k;
+
+p.group.position.set(p.x,0,p.z);
+p.group.rotation.y=-p.direction;
+
+updateVisual(p);
+
+}
+
+// Guest: send our key presses to the host
+
+let lastInputKey='';
+let inputTimer=0;
+
+function sendInput(dt){
+
+const i=inputOnline();
+
+const key=`${+i.up}${+i.down}${+i.left}${+i.right}${+i.shoot}${+i.dive}`;
+
+inputTimer+=dt;
+
+if(key!==lastInputKey||inputTimer>0.25){
+
+lastInputKey=key;
+inputTimer=0;
+
+send({t:'i',up:i.up,down:i.down,left:i.left,right:i.right,shoot:i.shoot,dive:i.dive});
+
+}
+
+}
+
+// ============================================================
+// MENU / UI
+// ============================================================
+
+const menuEl=document.getElementById('menu');
+const menuMain=document.getElementById('menuMain');
+const menuLobby=document.getElementById('menuLobby');
+const statusEl=document.getElementById('menuStatus');
+
+function setStatus(text){
+statusEl.textContent=text;
+}
+
+function showMenu(){
+
+menuEl.style.display='flex';
+menuMain.style.display='block';
+menuLobby.style.display='none';
+
+document.getElementById('result').style.display='none';
+
+setStatus('');
+updateHints();
+
+}
+
+function showLobby(code,text){
+
+menuEl.style.display='flex';
+menuMain.style.display='none';
+menuLobby.style.display='block';
+
+document.getElementById('roomCode').textContent=code;
+document.getElementById('lobbyText').textContent=text;
+
+setStatus('');
+updateHints();
+
+}
+
+function failToMenu(message){
+
+mode='menu';
+playing=false;
+
+closeNet();
+resetMatch();
+
+showMenu();
+setStatus(message);
+
+}
+
+function leaveToMenu(){
+
+mode='menu';
+playing=false;
+
+closeNet();
+resetMatch();
+
+showMenu();
+
+}
+
+function updateHints(){
+
+const ctl1=document.getElementById('ctl1');
+const ctl2=document.getElementById('ctl2');
+const info=document.getElementById('info');
+const restartBtn=document.getElementById('restartBtn');
+
+restartBtn.style.display=(mode==='guest')?'none':'inline-block';
+
+if(mode==='host'||mode==='guest'){
+
+ctl1.textContent='MOVE: W/S or ↑/↓ · TURN: A/D or ←/→ · SHOOT: F (or ENTER / SPACE)';
+ctl2.textContent='HIDE IN YOUR OWN INK: hold E, SHIFT or / (invisible, faster, can not shoot)';
+
+const team=mode==='host'?'BLUE':'PINK';
+info.textContent=`ROOM ${net.code} · YOU ARE ${team}`;
+
+}else{
+
+ctl1.textContent='Choose a game mode to start';
+ctl2.textContent='';
+info.textContent='';
+
+}
+
+}
+
+// Restart / play again (host or local only)
+function restart(){
+
+if(mode==='host'&&net.conn&&net.conn.open){
+
+startMatch();
+send({t:'start'});
+
+}
+
+}
+
+document.getElementById('roomInput').addEventListener('keydown',e=>{
+if(e.key==='Enter')joinGame();
+});
+
+window.restart=restart;
+window.hostGame=hostGame;
+window.joinGame=joinGame;
+window.leaveToMenu=leaveToMenu;
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+
+// Local game and host: this machine runs the whole match
+function authoritativeStep(dt){
+
+time-=dt;
+
+if(time<=0){
+time=0;
+finish();
+}
+
+timerEl.textContent=formatTime(time);
+
+const in1=inputOnline();
+const in2=remoteInput;
+
+updatePlayer(p1,in1,1,dt,true);
+updatePlayer(p2,in2,2,dt,true);
+
+updateShots(p1,p2,true,dt);
+updateShots(p2,p1,true,dt);
+
+calculateScore();
+
+// Host: send the state to the guest
+if(mode==='host'){
+
+netTimer+=dt;
+
+if(netTimer>=NET_SEND_INTERVAL){
+netTimer=0;
+send(snapshot());
+}
+
+}
+
+}
+
+// Online guest: predict our own movement, show what the host tells us
+function guestStep(dt){
+
+sendInput(dt);
+
+time=Math.max(0,time-dt);
+timerEl.textContent=formatTime(time);
+
+updatePlayer(p2,inputOnline(),2,dt,false);
+smoothRemote(p1,dt);
+
+updateShots(p1,p2,false,dt);
+updateShots(p2,p1,false,dt);
+
+calculateScore();
+
+}
+
+function animate(now){
+
+requestAnimationFrame(animate);
+
+const dt=Math.min((now-lastTime)/1000,0.05);
+
+lastTime=now;
+
+if(playing&&!ended){
+
+if(mode==='guest')guestStep(dt);
+else authoritativeStep(dt);
+
+// Keep the models in sync with the hiding state
+updateVisual(p1);
+updateVisual(p2);
+
+// MINIMAP
+
+mapTimer+=dt;
+
+if(mapTimer>0.1){
+drawMap();
+mapTimer=0;
+}
+
+}
+
+// INK TEXTURE (upload only when something changed)
+
+if(inkDirty){
+inkTexture.needsUpdate=true;
+inkDirty=false;
+}
+
+// CAMERA
+
+updateCamera(dt);
+
+// RENDER
+
+renderer.render(scene,camera);
+
+}
+
+// ============================================================
+// RESIZE
+// ============================================================
+
+function resize(){
+
+const el=document.getElementById('game');
+
+const w=el.clientWidth;
+const h=el.clientHeight;
+
+if(!w||!h)return;
+
+camera.aspect=w/h;
+camera.updateProjectionMatrix();
+
+renderer.setSize(w,h);
+
+const mapW=mapCanvas.clientWidth;
+const mapH=mapCanvas.clientHeight;
+
+if(mapW&&mapH){
+mapCanvas.width=mapW;
+mapCanvas.height=mapH;
+}
+
+drawMap();
+
+}
+
+window.addEventListener('resize',resize);
+
+// ============================================================
+// START
+// ============================================================
+
+resetPlayers();
+
+resize();
+drawMap();
+updateCamera(1,true);
+updateHints();
+
+requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>
